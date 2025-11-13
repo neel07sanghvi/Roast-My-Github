@@ -1,23 +1,57 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Flame, Heart, Copy, Check } from "lucide-react";
+import { Flame, Heart, Copy, Check, Zap, Square } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+
+function CreativeLoader() {
+  return (
+    <div className="space-y-6">
+      {[1, 2, 3].map((i) => (
+        <div key={i} className="flex gap-4 items-start animate-pulse">
+          <div
+            className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500/20 to-pink-500/20 flex-shrink-0 animate-spin"
+            style={{ animationDuration: `${2 + i}s` }}
+          />
+          <div className="flex-1 space-y-3">
+            <div
+              className="h-4 bg-gradient-to-r from-slate-700 via-slate-600 to-slate-700 rounded-lg w-3/4"
+              style={{ animationDelay: `${i * 0.1}s` }}
+            />
+            <div
+              className="h-4 bg-gradient-to-r from-slate-700 via-slate-600 to-slate-700 rounded-lg w-full"
+              style={{ animationDelay: `${i * 0.2}s` }}
+            />
+            <div
+              className="h-4 bg-gradient-to-r from-slate-700 via-slate-600 to-slate-700 rounded-lg w-5/6"
+              style={{ animationDelay: `${i * 0.3}s` }}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function Home() {
   const [username, setUsername] = useState("");
-  const [mode, setMode] = useState<"roast" | "feedback">("roast");
+  const [mode, setMode] = useState("roast");
   const [result, setResult] = useState("");
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
   const [copied, setCopied] = useState(false);
+  const [controller, setController] = useState<AbortController | null>(null);
 
   const handleSubmit = async () => {
     if (!username.trim() || loading) return;
+
+    const ac = new AbortController();
+    setController(ac);
+
     setLoading(true);
     setResult("");
     setStatus("Starting...");
@@ -28,6 +62,7 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, mode }),
+        signal: ac.signal,
       });
 
       if (!res.ok) {
@@ -48,14 +83,13 @@ export default function Home() {
 
         buffer += decoder.decode(value, { stream: true });
 
-        // Split by newlines to process complete SSE messages
         const lines = buffer.split("\n");
-        buffer = lines.pop() || ""; // Keep incomplete line in buffer
+        buffer = lines.pop() || "";
 
         for (const line of lines) {
           if (line.startsWith("data: ")) {
             try {
-              const jsonStr = line.slice(6); // Remove "data: " prefix
+              const jsonStr = line.slice(6);
               const parsed = JSON.parse(jsonStr);
 
               switch (parsed.type) {
@@ -64,7 +98,7 @@ export default function Home() {
                   break;
 
                 case "response_start":
-                  setStatus(""); // Clear status when response starts
+                  setStatus("");
                   break;
 
                 case "response_chunk":
@@ -81,9 +115,6 @@ export default function Home() {
                   setStatus("");
                   setLoading(false);
                   break;
-
-                default:
-                  console.log("Unknown event type:", parsed.type);
               }
             } catch (parseError) {
               console.warn("Failed to parse SSE message:", line);
@@ -91,12 +122,26 @@ export default function Home() {
           }
         }
       }
-    } catch (error) {
-      console.error("Connection error:", error);
-      setResult("Failed to connect. Try again.");
-      setStatus("");
+    } catch (error: any) {
+      if (error?.name === "AbortError") {
+        setStatus("Stopped by user");
+        setLoading(false);
+      } else {
+        console.error("Connection error:", error);
+        setResult("Failed to connect. Try again.");
+        setStatus("");
+        setLoading(false);
+      }
     } finally {
+      setController(null);
+    }
+  };
+
+  const handleStop = () => {
+    if (controller) {
+      controller.abort();
       setLoading(false);
+      setStatus("Stopped");
     }
   };
 
@@ -112,76 +157,118 @@ export default function Home() {
   };
 
   return (
-    <main className="h-screen overflow-hidden bg-gradient-to-br from-slate-900 to-slate-800 p-6">
-      <div className="max-w-2xl mx-auto h-full flex flex-col pt-12">
-        <div className="flex-shrink-0">
-          <h1 className="text-5xl font-bold text-white text-center mb-2">
-            AI Roast My GitHub
-          </h1>
-          <p className="text-gray-400 text-center mb-8">
-            Enter your GitHub username. Get roasted or respected.
+    <main className="h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-6 relative overflow-hidden">
+      {/* Animated background effect */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-0 left-1/4 w-96 h-96 bg-purple-500/10 rounded-full blur-3xl animate-pulse" />
+        <div
+          className="absolute bottom-0 right-1/4 w-96 h-96 bg-pink-500/10 rounded-full blur-3xl animate-pulse"
+          style={{ animationDelay: "1s" }}
+        />
+      </div>
+
+      <div className="max-w-3xl mx-auto h-full flex flex-col relative z-10">
+        <div className="flex-shrink-0 pt-8 pb-6">
+          <div className="flex items-center justify-center gap-3 mb-3">
+            <Zap className="w-10 h-10 text-yellow-400 animate-pulse" />
+            <h1 className="text-6xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-400 via-pink-400 to-red-400 text-center">
+              GitHub Roaster
+            </h1>
+            <Zap
+              className="w-10 h-10 text-yellow-400 animate-pulse"
+              style={{ animationDelay: "0.5s" }}
+            />
+          </div>
+          <p className="text-gray-400 text-center text-lg">
+            Enter your GitHub username. Get{" "}
+            <span className="text-red-400 font-semibold">roasted</span> or{" "}
+            <span className="text-green-400 font-semibold">respected</span>.
           </p>
         </div>
 
-        <Card className="flex-1 flex flex-col p-6 bg-slate-800 border-slate-700 overflow-hidden">
-          <div className="flex-1 overflow-y-auto mb-6 pr-2 scrollbar-thin scrollbar-thumb-slate-600 scrollbar-track-slate-800">
+        <Card className="flex-1 flex flex-col p-6 bg-slate-900/80 backdrop-blur-xl border-2 border-slate-700/50 shadow-2xl shadow-purple-500/10 min-h-0">
+          <div
+            className="flex-1 overflow-y-auto mb-6 pr-2 min-h-0"
+            style={{
+              scrollbarWidth: "thin",
+              scrollbarColor: "#6b7280 #1e293b",
+            }}
+          >
             {loading && status && (
-              <div className="mb-4 p-3 bg-slate-700 rounded-lg border border-slate-600">
-                <p className="text-sm text-blue-400 flex items-center gap-2">
-                  <span className="inline-block w-2 h-2 bg-blue-400 rounded-full animate-pulse"></span>
+              <div className="mb-6 p-4 bg-gradient-to-r from-purple-900/30 to-pink-900/30 rounded-xl border border-purple-500/30 backdrop-blur-sm">
+                <p className="text-sm text-purple-300 flex items-center gap-3">
+                  <span className="relative flex h-3 w-3">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-purple-500"></span>
+                  </span>
                   {status}
                 </p>
               </div>
             )}
 
             {loading && !result ? (
-              <div className="space-y-3">
-                <Skeleton className="h-4 w-full bg-slate-700" />
-                <Skeleton className="h-4 w-5/6 bg-slate-700" />
-                <Skeleton className="h-4 w-4/6 bg-slate-700" />
-              </div>
+              <CreativeLoader />
             ) : result ? (
-              <div className="relative group">
-                <div className="text-lg leading-relaxed text-gray-200 whitespace-pre-wrap select-text prose prose-invert prose-headings:text-white prose-p:text-gray-200 prose-strong:text-white prose-li:text-gray-200 max-w-none">
-                  {result}
+              <div className="relative">
+                {/* Sticky Copy Button - Top Right, Always Visible */}
+                <div className="sticky top-4 z-10 flex justify-end mb-2">
+                  <Button
+                    onClick={handleCopy}
+                    variant="ghost"
+                    size="icon"
+                    className="bg-slate-800/90 hover:bg-slate-700/90 backdrop-blur-sm border border-slate-600 shadow-lg rounded-full p-2 cursor-pointer transition-all hover:scale-110"
+                    title="Copy to clipboard"
+                  >
+                    {copied ? (
+                      <Check className="w-5 h-5 text-green-400" />
+                    ) : (
+                      <Copy className="w-5 h-5 text-gray-300" />
+                    )}
+                  </Button>
                 </div>
-                <Button
-                  onClick={handleCopy}
-                  variant="ghost"
-                  size="icon"
-                  className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-700 hover:bg-slate-600"
-                  title="Copy to clipboard"
+
+                {/* Markdown Content */}
+                <div
+                  className="prose prose-invert prose-lg max-w-none 
+                  prose-headings:text-transparent prose-headings:bg-clip-text prose-headings:bg-gradient-to-r prose-headings:from-purple-400 prose-headings:to-pink-400
+                  prose-p:text-gray-100 prose-p:leading-relaxed
+                  prose-strong:text-yellow-300 prose-strong:font-bold
+                  prose-em:text-pink-300
+                  prose-code:text-green-300 prose-code:bg-slate-800 prose-code:px-2 prose-code:py-1 prose-code:rounded
+                  prose-li:text-gray-100
+                  prose-a:text-blue-400 prose-a:no-underline hover:prose-a:text-blue-300
+                  text-gray-100"
                 >
-                  {copied ? (
-                    <Check className="w-4 h-4 text-green-400" />
-                  ) : (
-                    <Copy className="w-4 h-4" />
-                  )}
-                </Button>
+                  <ReactMarkdown>{result}</ReactMarkdown>
+                </div>
               </div>
             ) : (
-              <p className="text-center text-slate-500 italic pt-12">
-                Your GitHub sins will be exposed here...
-              </p>
+              <div className="flex flex-col items-center justify-center h-full space-y-4">
+                <div className="text-8xl opacity-20">🔥</div>
+                <p className="text-center text-slate-500 italic text-lg">
+                  Your GitHub sins will be exposed here...
+                </p>
+              </div>
             )}
           </div>
 
-          <div className="flex-shrink-0">
-            <div className="flex justify-center mb-4">
+          <div className="flex-shrink-0 space-y-4">
+            <div className="flex justify-center">
               <ToggleGroup
                 type="single"
                 value={mode}
-                onValueChange={(v) => v && setMode(v as any)}
+                onValueChange={(v) => v && setMode(v)}
+                className="bg-slate-800/50 p-1 rounded-lg border border-slate-700"
               >
                 <ToggleGroupItem
                   value="roast"
-                  className="flex items-center gap-2"
+                  className="flex items-center gap-2 data-[state=on]:bg-gradient-to-r data-[state=on]:from-red-600 data-[state=on]:to-orange-600 data-[state=on]:text-white transition-all cursor-pointer hover:scale-105"
                 >
                   <Flame className="w-4 h-4" /> Roast
                 </ToggleGroupItem>
                 <ToggleGroupItem
                   value="feedback"
-                  className="flex items-center gap-2"
+                  className="flex items-center gap-2 data-[state=on]:bg-gradient-to-r data-[state=on]:from-green-600 data-[state=on]:to-emerald-600 data-[state=on]:text-white transition-all cursor-pointer hover:scale-105"
                 >
                   <Heart className="w-4 h-4" /> Feedback
                 </ToggleGroupItem>
@@ -190,26 +277,46 @@ export default function Home() {
 
             <div className="flex gap-3">
               <Input
-                placeholder="Github Username"
+                placeholder="GitHub Username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-                className="flex-1 bg-slate-900 border-slate-600 text-white placeholder:text-slate-500 select-text"
+                onKeyDown={(e) =>
+                  e.key === "Enter" && !loading && handleSubmit()
+                }
                 disabled={loading}
+                className="flex-1 bg-slate-800/50 border-2 border-slate-600 text-white placeholder:text-slate-500 
+                          focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all
+                          selection:bg-purple-500/30 selection:text-white h-12 text-lg"
               />
-              <Button
-                onClick={handleSubmit}
-                disabled={loading}
-                className="px-8"
-              >
-                {loading ? "Analyzing..." : "Go"}
-              </Button>
+              {loading ? (
+                <Button
+                  onClick={handleStop}
+                  className="px-8 h-12 bg-gradient-to-r from-red-600 to-orange-600 hover:from-red-700 hover:to-orange-700 
+                            text-white font-bold shadow-lg shadow-red-500/30 transition-all hover:scale-105 
+                            cursor-pointer border-0"
+                >
+                  <span className="flex items-center gap-2">
+                    <Square className="w-4 h-4" />
+                    Stop
+                  </span>
+                </Button>
+              ) : (
+                <Button
+                  onClick={handleSubmit}
+                  disabled={loading}
+                  className="px-8 h-12 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 
+                            text-white font-bold shadow-lg shadow-purple-500/30 transition-all hover:scale-105 
+                            disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer border-0"
+                >
+                  Fire 🔥
+                </Button>
+              )}
             </div>
           </div>
         </Card>
 
-        <p className="flex-shrink-0 text-center text-xs text-slate-500 mt-6">
-          Built with Next.js • GitHub API • OpenAI • shadcn/ui
+        <p className="flex-shrink-0 text-center text-xs text-slate-600 mt-4">
+          Built with Next.js • GitHub API • Vercel AI SDK
         </p>
       </div>
     </main>
