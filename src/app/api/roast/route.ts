@@ -90,7 +90,34 @@ function analyzeCode(code: string, fileName: string) {
   };
 }
 
+const makeWithAbort = (
+  signal: AbortSignal,
+  writer: WritableStreamDefaultWriter
+) => {
+  return async <T>(promise: Promise<T>): Promise<T> => {
+    if (signal.aborted) {
+      await writer.close().catch(() => {});
+      throw new Error("Client aborted");
+    }
+
+    return Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        const onAbort = () => {
+          writer.close().catch(() => {});
+          reject(new Error("Client aborted"));
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+      }),
+    ]);
+  };
+};
+
 export async function POST(req: NextRequest) {
+  const { signal } = req;
+
+  if (signal.aborted) return new Response(null, { status: 499 });
+
   try {
     const { username, mode } = await req.json();
     if (!username) {
@@ -102,16 +129,29 @@ export async function POST(req: NextRequest) {
     const writer = stream.writable.getWriter();
 
     const sendEvent = async (type: string, data: any) => {
+      if (signal.aborted) {
+        await writer.close().catch(() => {});
+        throw new Error("Client aborted");
+      }
+
       const message = `data: ${JSON.stringify({ type, ...data })}\n\n`;
       await writer.write(encoder.encode(message));
     };
+
+    signal.addEventListener("abort", () => {
+      writer.close().catch(() => {});
+    });
+
+    const withAbort = makeWithAbort(signal, writer);
 
     (async () => {
       try {
         await sendEvent("status", { content: "Fetching GitHub profile..." });
 
         // ✅ PHASE 1: Get user profile data
-        const { data: user } = await octokit.users.getByUsername({ username });
+        const { data: user } = await withAbort(
+          octokit.users.getByUsername({ username })
+        );
 
         const profileData = {
           bio: user.bio || "No bio",
@@ -126,11 +166,13 @@ export async function POST(req: NextRequest) {
 
         await sendEvent("status", { content: "Fetching repositories..." });
 
-        const { data: repos } = await octokit.repos.listForUser({
-          username,
-          per_page: 10,
-          sort: "updated",
-        });
+        const { data: repos } = await withAbort(
+          octokit.repos.listForUser({
+            username,
+            per_page: 1,
+            sort: "updated",
+          })
+        );
 
         if (repos.length === 0) {
           await sendEvent("error", {
@@ -152,20 +194,24 @@ export async function POST(req: NextRequest) {
 
           // Get detailed commit information
           try {
-            const { data: commits } = await octokit.repos.listCommits({
-              owner: username,
-              repo: repo.name,
-              per_page: 5,
-            });
+            const { data: commits } = await withAbort(
+              octokit.repos.listCommits({
+                owner: username,
+                repo: repo.name,
+                per_page: 5,
+              })
+            );
 
             for (const commit of commits) {
               try {
                 // Get detailed commit stats
-                const { data: detailedCommit } = await octokit.repos.getCommit({
-                  owner: username,
-                  repo: repo.name,
-                  ref: commit.sha,
-                });
+                const { data: detailedCommit } = await withAbort(
+                  octokit.repos.getCommit({
+                    owner: username,
+                    repo: repo.name,
+                    ref: commit.sha,
+                  })
+                );
 
                 recentCommits.push({
                   message: commit.commit.message.split("\n")[0],
@@ -193,27 +239,31 @@ export async function POST(req: NextRequest) {
 
           // Get package.json
           try {
-            const { data: pkg } = await octokit.repos.getContent({
-              owner: username,
-              repo: repo.name,
-              path: "package.json",
-            });
-            if ("content" in pkg) {
-              packageJson = JSON.parse(
-                Buffer.from(pkg.content, "base64").toString()
-              );
+            const { data: pkg } = await withAbort(
+              octokit.repos.getContent({
+                owner: username,
+                repo: repo.name,
+                path: "package.json",
+              })
+            );
+
+            if ("content" in pkg && typeof pkg.content === "string") {
+              packageJson = JSON.parse(atob(pkg.content));
             }
           } catch (e) {}
 
           // Get README
           try {
-            const { data: readme } = await octokit.repos.getContent({
-              owner: username,
-              repo: repo.name,
-              path: "README.md",
-            });
-            if ("content" in readme) {
-              const content = Buffer.from(readme.content, "base64").toString();
+            const { data: readme } = await withAbort(
+              octokit.repos.getContent({
+                owner: username,
+                repo: repo.name,
+                path: "README.md",
+              })
+            );
+
+            if ("content" in readme && typeof readme.content === "string") {
+              const content = atob(readme.content);
               readmeSnippet =
                 content.slice(0, 300) + (content.length > 300 ? "..." : "");
             }
@@ -240,14 +290,16 @@ export async function POST(req: NextRequest) {
 
           for (const filePath of codeFiles) {
             try {
-              const { data: file } = await octokit.repos.getContent({
-                owner: username,
-                repo: repo.name,
-                path: filePath,
-              });
+              const { data: file } = await withAbort(
+                octokit.repos.getContent({
+                  owner: username,
+                  repo: repo.name,
+                  path: filePath,
+                })
+              );
 
-              if ("content" in file) {
-                const code = Buffer.from(file.content, "base64").toString();
+              if ("content" in file && typeof file.content === "string") {
+                const code = atob(file.content);
                 codeAnalysis = analyzeCode(code, filePath);
                 break; // Found a file, stop searching
               }
@@ -463,6 +515,7 @@ ${
           prompt: userPrompt,
           temperature: isRoast ? 0.9 : 0.7,
           maxOutputTokens: 800,
+          abortSignal: signal,
         });
 
         for await (const chunk of result.textStream) {

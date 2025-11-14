@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -44,13 +44,13 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
   const [copied, setCopied] = useState(false);
-  const [controller, setController] = useState<AbortController | null>(null);
+
+  const controllerRef = useRef<AbortController | null>(null);
 
   const handleSubmit = async () => {
     if (!username.trim() || loading) return;
 
-    const ac = new AbortController();
-    setController(ac);
+    controllerRef.current = new AbortController();
 
     setLoading(true);
     setResult("");
@@ -62,7 +62,7 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, mode }),
-        signal: ac.signal,
+        signal: controllerRef.current.signal,
       });
 
       if (!res.ok) {
@@ -133,13 +133,13 @@ export default function Home() {
         setLoading(false);
       }
     } finally {
-      setController(null);
+      controllerRef.current = null;
     }
   };
 
   const handleStop = () => {
-    if (controller) {
-      controller.abort();
+    if (controllerRef.current) {
+      controllerRef.current.abort();
       setLoading(false);
       setStatus("Stopped");
     }
@@ -155,6 +155,21 @@ export default function Home() {
       console.error("Failed to copy:", err);
     }
   };
+
+  useEffect(() => {
+    const abort = () => {
+      controllerRef.current?.abort();
+    };
+
+    window.addEventListener("beforeunload", abort);
+    window.addEventListener("pagehide", abort);
+
+    return () => {
+      window.removeEventListener("beforeunload", abort);
+      window.removeEventListener("pagehide", abort);
+      abort();
+    };
+  }, []);
 
   return (
     <main className="h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-6 relative overflow-hidden">
