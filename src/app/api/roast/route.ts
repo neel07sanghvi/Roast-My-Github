@@ -251,9 +251,16 @@ export async function POST(req: NextRequest) {
   if (signal.aborted) return new Response(null, { status: 499 });
 
   try {
-    const { username, mode } = await req.json();
+    let { username, mode } = await req.json();
+
     if (!username) {
       return new Response("Username required", { status: 400 });
+    }
+
+    username = username.trim();
+
+    if (username.includes('github.com/')) {
+      username = username.split('github.com/')[1].split('/')[0];
     }
 
     const encoder = new TextEncoder();
